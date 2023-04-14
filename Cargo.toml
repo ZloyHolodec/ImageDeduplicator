@@ -6,8 +6,12 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+futures = "0.3.28"
 gtk = { version = "0.6.4", package = "gtk4", features = ["v4_8"] }
-sqlx = { version = "0.6.3", features = ["sqlite", "runtime-async-std-native-tls"] }
+log = "0.4.17"
+simple_logger = "4.1.0"
+sqlx = { version = "0.6.3", features = ["sqlite", "runtime-tokio-rustls"] }
+tokio = { version = "1.27.0", features = ["full"] }
 
 [build-dependencies]
 glib-build-tools = "0.17.0"
