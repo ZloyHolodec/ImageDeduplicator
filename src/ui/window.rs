@@ -1,9 +1,9 @@
-use crate::database::Database;
-use crate::database::ImageWrapper;
-
+use super::processes::find_duplicates;
 use super::processes::insert_new_folders;
+use super::processes::remove_and_protect_image;
 use super::processes::scan_folders;
 use super::processes::ScanFolderStatus;
+use futures::executor;
 use gtk;
 use gtk::glib;
 use gtk::prelude::*;
@@ -14,6 +14,8 @@ use std::thread;
 pub struct MainWindow {
     left_image: gtk::Image,
     right_image: gtk::Image,
+    left_image_label: gtk::Label,
+    right_image_label: gtk::Label,
     remove_left_btn: gtk::Button,
     remove_right_btn: gtk::Button,
     not_duplicates_btn: gtk::Button,
@@ -21,8 +23,6 @@ pub struct MainWindow {
     scan_btn: gtk::Button,
     new_folder_chooser: gtk::FileChooserDialog,
     status_label: gtk::Label,
-
-    last_search_index: i64,
 }
 
 impl MainWindow {
@@ -30,9 +30,7 @@ impl MainWindow {
         let left_image = gtk::Image::new();
         let right_image = gtk::Image::new();
 
-        left_image.set_file(Some("test_image.jpg"));
         left_image.set_size_request(800, 600);
-        right_image.set_file(Some("test_image.jpg"));
         right_image.set_size_request(800, 600);
 
         let remove_left_btn = gtk::Button::new();
@@ -68,7 +66,6 @@ impl MainWindow {
         }
 
         let result = Self {
-            last_search_index: 0,
             left_image,
             right_image,
             remove_left_btn,
@@ -78,6 +75,8 @@ impl MainWindow {
             new_folder_chooser,
             scan_btn,
             status_label,
+            left_image_label: gtk::Label::new(None),
+            right_image_label: gtk::Label::new(None),
         };
 
         result.attach_handlers();
@@ -88,11 +87,18 @@ impl MainWindow {
     fn attach_handlers(&self) {
         self.handle_add_folders_btn();
         self.handle_scan_btn();
+        self.handle_remove_left();
+        self.handle_remove_right();
+        self.handle_save_both();
     }
 
     fn handle_scan_btn(&self) {
         let blockable_widgets = Rc::new(self.get_blockable_widgets());
         let status_label = self.status_label.clone();
+        let left_image = self.left_image.clone();
+        let right_image = self.right_image.clone();
+        let left_image_label = self.left_image_label.clone();
+        let right_image_label = self.right_image_label.clone();
 
         self.scan_btn.connect_clicked(move |_| {
             status_label.set_label("Start scanning");
@@ -109,12 +115,23 @@ impl MainWindow {
             let blockable_widgets_clone = blockable_widgets.clone();
 
             let status_label_clone = status_label.clone();
+            let left_image_clone = left_image.clone();
+            let right_image_clone = right_image.clone();
+            let left_image_label_clone = left_image_label.clone();
+            let right_image_label_clone = right_image_label.clone();
             receiver.attach(None, move |message| match message {
                 ScanFolderStatus::Done => {
                     blockable_widgets_clone
                         .iter()
                         .for_each(|x| x.set_sensitive(true));
                     status_label_clone.set_label("Scan complete");
+                    executor::block_on(find_duplicates(
+                        left_image_clone.clone(),
+                        left_image_label_clone.clone(),
+                        right_image_clone.clone(),
+                        right_image_label_clone.clone(),
+                    ))
+                    .unwrap();
                     Continue(false)
                 }
                 ScanFolderStatus::ImageFound(image) => {
@@ -172,6 +189,75 @@ impl MainWindow {
             });
     }
 
+    fn handle_remove_left(&self) {
+        let left_image = self.left_image.clone();
+        let right_image = self.right_image.clone();
+        let left_image_label = self.left_image_label.clone();
+        let right_image_label = self.right_image_label.clone();
+
+        self.remove_left_btn.connect_clicked(move |_| {
+            match (left_image.file(), right_image.file()) {
+                (Some(left_file), Some(right_file)) => executor::block_on(
+                    remove_and_protect_image(&right_file.to_string(), Some(&left_file.to_string())),
+                ),
+                (_, _) => {}
+            }
+            executor::block_on(find_duplicates(
+                left_image.clone(),
+                left_image_label.clone(),
+                right_image.clone(),
+                right_image_label.clone(),
+            ))
+            .unwrap();
+        });
+    }
+
+    fn handle_save_both(&self) {
+        let left_image = self.left_image.clone();
+        let right_image = self.right_image.clone();
+        let left_image_label = self.left_image_label.clone();
+        let right_image_label = self.right_image_label.clone();
+
+        self.not_duplicates_btn.connect_clicked(move |_| {
+            match (left_image.file(), right_image.file()) {
+                (Some(left_file), Some(_)) => {
+                    executor::block_on(remove_and_protect_image(&left_file.to_string(), None))
+                }
+                (_, _) => {}
+            }
+            executor::block_on(find_duplicates(
+                left_image.clone(),
+                left_image_label.clone(),
+                right_image.clone(),
+                right_image_label.clone(),
+            ))
+            .unwrap();
+        });
+    }
+
+    fn handle_remove_right(&self) {
+        let left_image = self.left_image.clone();
+        let right_image = self.right_image.clone();
+        let left_image_label = self.left_image_label.clone();
+        let right_image_label = self.right_image_label.clone();
+
+        self.remove_right_btn.connect_clicked(move |_| {
+            match (left_image.file(), right_image.file()) {
+                (Some(left_file), Some(right_file)) => executor::block_on(
+                    remove_and_protect_image(&left_file.to_string(), Some(&right_file.to_string())),
+                ),
+                (_, _) => {}
+            }
+            executor::block_on(find_duplicates(
+                left_image.clone(),
+                left_image_label.clone(),
+                right_image.clone(),
+                right_image_label.clone(),
+            ))
+            .unwrap();
+        });
+    }
+
     fn get_blockable_widgets(&self) -> Vec<impl WidgetExt> {
         return vec![
             self.remove_left_btn.clone(),
@@ -205,8 +291,16 @@ pub fn build_ui(app: &Application) {
     image_grid.set_vexpand(true);
     image_grid.set_spacing(32);
 
-    image_grid.append(&main_window.left_image);
-    image_grid.append(&main_window.right_image);
+    let left_image_grid = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    left_image_grid.append(&main_window.left_image);
+    left_image_grid.append(&main_window.left_image_label);
+
+    let right_image_grid = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    right_image_grid.append(&main_window.right_image);
+    right_image_grid.append(&main_window.right_image_label);
+
+    image_grid.append(&left_image_grid);
+    image_grid.append(&right_image_grid);
 
     main_grid.append(&image_grid);
 
@@ -224,10 +318,4 @@ pub fn build_ui(app: &Application) {
     window.set_child(Some(&main_grid));
 
     window.show();
-}
-
-fn find_next_duplicates(last_index: Rc<i64>) -> Option<(ImageWrapper, ImageWrapper)> {
-    let database = Database::connect_default();
-
-    None
 }

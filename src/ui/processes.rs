@@ -5,6 +5,7 @@ use crate::database::ImageWrapper;
 use crate::filesystem::find_file_recursive;
 use gtk::glib::Sender;
 use image;
+use std::fs;
 use std::sync::mpsc;
 use std::thread;
 use tokio;
@@ -165,4 +166,41 @@ fn split_images_for_processing(
     }
 
     images_chunks
+}
+
+pub async fn find_duplicates(
+    left_img: gtk::Image,
+    left_img_label: gtk::Label,
+    right_img: gtk::Image,
+    right_img_label: gtk::Label,
+) -> Result<(), sqlx::Error> {
+    let database = Database::connect_default().await;
+    let mut connection = database.get_connection().await;
+
+    let images = connection.get_duplicates().await?;
+
+    if let Some(images) = images {
+        left_img.set_file(Some(images.0.path.as_str()));
+        right_img.set_file(Some(images.1.path.as_str()));
+        left_img_label.set_label(&images.0.path);
+        right_img_label.set_label(&images.1.path);
+    } else {
+        left_img.set_file(None);
+        right_img.set_file(None);
+        left_img_label.set_label("");
+        right_img_label.set_label("");
+    }
+
+    Ok(())
+}
+
+pub async fn remove_and_protect_image(image_to_protect: &String, image_to_remove: Option<&String>) {
+    if let Some(image_to_remove) = image_to_remove {
+        fs::remove_file(image_to_remove).unwrap();
+    }
+
+    let database = Database::connect_default().await;
+    let mut connection = database.get_connection().await;
+
+    connection.mark_protected(&image_to_protect).await.unwrap();
 }

@@ -59,7 +59,8 @@ impl Database {
                 "CREATE TABLE IF NOT EXISTS images (
                     id INTEGER PRIMARY KEY,
                     path TEXT(2048) UNIQUE,
-                    hash INTEGER(64)
+                    hash INTEGER(64),
+                    protected INTEGER
                 )
                 ",
             )
@@ -103,8 +104,9 @@ impl AcquiredConnection {
 
     // it may or may not insert a new image
     pub async fn insert_image(&mut self, path: &String) -> Result<(), sqlx::Error> {
-        sqlx::query("INSERT INTO images(path) VALUES(?)")
+        sqlx::query("INSERT INTO images(path, protected) VALUES(?, ?)")
             .bind(path)
+            .bind(0)
             .execute(&mut self.connection)
             .await?;
         Ok(())
@@ -118,11 +120,7 @@ impl AcquiredConnection {
         let mut result = Vec::with_capacity(rows.len());
 
         for row in rows.iter() {
-            result.push(ImageWrapper {
-                id: row.get("id"),
-                path: row.get("path"),
-                hash: row.get("hash"),
-            });
+            result.push(ImageWrapper::from_row(&row));
         }
 
         Ok(result)
@@ -155,5 +153,55 @@ impl AcquiredConnection {
         }
 
         Ok(result)
+    }
+
+    pub async fn get_duplicates(
+        &mut self,
+    ) -> Result<Option<(ImageWrapper, ImageWrapper)>, sqlx::Error> {
+        let query_result = sqlx::query(
+            "
+            SELECT 
+              id, path, hash
+            FROM images 
+            WHERE hash IN (
+                SELECT hash 
+                FROM images 
+                WHERE hash IS NOT NULL AND hash != 0 AND protected = FALSE
+                GROUP BY hash 
+                HAVING count(id) > 1 
+                LIMIT 1
+            ) AND protected = FALSE
+            LIMIT 2;
+            ",
+        )
+        .fetch_all(&mut self.connection)
+        .await?;
+
+        if query_result.len() < 2 {
+            return Ok(None);
+        }
+
+        Ok(Some((
+            ImageWrapper::from_row(&query_result[0]),
+            ImageWrapper::from_row(&query_result[1]),
+        )))
+    }
+
+    pub async fn mark_protected(&mut self, path: &String) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE images SET protected=TRUE WHERE path = ?")
+            .bind(path)
+            .execute(&mut self.connection)
+            .await?;
+        Ok(())
+    }
+}
+
+impl ImageWrapper {
+    fn from_row(row: &sqlx::sqlite::SqliteRow) -> Self {
+        Self {
+            id: row.get("id"),
+            path: row.get("path"),
+            hash: row.get("hash"),
+        }
     }
 }
