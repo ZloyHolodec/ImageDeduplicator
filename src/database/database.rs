@@ -21,6 +21,12 @@ pub struct FolderWrapper {
     pub id: i64,
     pub path: String,
 }
+#[derive(Clone)]
+pub struct ImageWrapper {
+    pub id: i64,
+    pub path: String,
+    pub hash: Option<i64>,
+}
 
 impl Database {
     pub async fn connect(connection_path: String) -> Self {
@@ -53,7 +59,7 @@ impl Database {
                 "CREATE TABLE IF NOT EXISTS images (
                     id INTEGER PRIMARY KEY,
                     path TEXT(2048) UNIQUE,
-                    hash TEXT(256)
+                    hash INTEGER(64)
                 )
                 ",
             )
@@ -79,7 +85,6 @@ impl AcquiredConnection {
                 continue;
             }
 
-            println!("INSERTING");
             let record_id = sqlx::query("INSERT INTO folders(path) VALUES (?)")
                 .bind(&path)
                 .execute(&mut self.connection)
@@ -94,5 +99,61 @@ impl AcquiredConnection {
         }
 
         result
+    }
+
+    // it may or may not insert a new image
+    pub async fn insert_image(&mut self, path: &String) -> Result<(), sqlx::Error> {
+        sqlx::query("INSERT INTO images(path) VALUES(?)")
+            .bind(path)
+            .execute(&mut self.connection)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_non_hashed_images(&mut self) -> Result<Vec<ImageWrapper>, sqlx::Error> {
+        let rows = sqlx::query("SELECT id, path, hash FROM images WHERE hash IS NULL")
+            .fetch_all(&mut self.connection)
+            .await?;
+
+        let mut result = Vec::with_capacity(rows.len());
+
+        for row in rows.iter() {
+            result.push(ImageWrapper {
+                id: row.get("id"),
+                path: row.get("path"),
+                hash: row.get("hash"),
+            });
+        }
+
+        Ok(result)
+    }
+
+    pub async fn update_image_hash(
+        &mut self,
+        id: i64,
+        hash: Option<i64>,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE images SET hash = ? WHERE id = ?")
+            .bind(hash)
+            .bind(id)
+            .execute(&mut self.connection)
+            .await?;
+        return Ok(());
+    }
+
+    pub async fn get_all_folders(&mut self) -> Result<Vec<FolderWrapper>, sqlx::Error> {
+        let mut result = Vec::new();
+        let query_result = sqlx::query("SELECT id, path FROM folders")
+            .fetch_all(&mut self.connection)
+            .await?;
+
+        for row in query_result.iter() {
+            result.push(FolderWrapper {
+                id: row.get("id"),
+                path: row.get("path"),
+            });
+        }
+
+        Ok(result)
     }
 }

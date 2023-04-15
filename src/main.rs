@@ -25,7 +25,6 @@ async fn main() -> glib::ExitCode {
     app.run()
 }
 
-
 async fn initialize_db() {
     let database = Database::connect_default().await;
     database.migrate().await;
